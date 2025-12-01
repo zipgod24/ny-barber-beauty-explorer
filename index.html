@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NY Barber & Beauty Shops Explorer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Search all 52,000+ barber, cosmetology, nail and esthetics shops in New York State">
+<style>
+    :root { --primary: #003087; --light: #f8f9fa; --red: #dc3545; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin:0; padding:16px; background:var(--light); color:#222; line-height:1.5; }
+    h1 { text-align:center; color:var(--primary); margin:0 0 8px; font-size:1.9rem; }
+    .subtitle { text-align:center; color:#555; margin-bottom:20px; }
+    #controls { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; justify-content:center; }
+    input, select, button {
+        padding:12px; border:1px solid #ccc; border-radius:8px; font-size:16px;
+        flex:1; min-width:280px; max-width:420px;
+    }
+    button { background:var(--primary); color:white; border:none; cursor:pointer; flex:none; }
+    button:hover { background:#00255a; }
+    #resultsInfo { text-align:center; color:#555; margin:12px 0; font-weight:600; }
+    .loading { text-align:center; padding:60px 20px; color:#666; font-size:18px; }
+    .error { background:#f8d7da; color:#721c24; padding:12px; border-radius:8px; margin:10px 0; text-align:center; }
+    #debug { font-size:12px; color:#888; text-align:center; margin:10px 0; }
+
+    /* Desktop Table */
+    #desktopTable { width:100%; border-collapse:collapse; background:white; border-radius:12px; overflow:hidden;
+        box-shadow:0 4px 15px rgba(0,0,0,0.1); display:none; margin-top:10px; }
+    th { background:var(--primary); color:white; padding:14px; text-align:left; cursor:pointer; user-select:none; }
+    th:hover { background:#00255a; }
+    td { padding:12px 14px; border-bottom:1px solid #eee; }
+    tr:nth-child(even) { background:#f9fbff; }
+    tr:hover { background:#e3f2fd; }
+
+    /* Mobile Cards */
+    #mobileResults { max-height:70vh; overflow-y:auto; }
+    .card {
+        background:white; border-radius:12px; padding:16px; margin-bottom:12px;
+        box-shadow:0 2px 10px rgba(0,0,0,0.08); border-left:5px solid var(--primary);
+    }
+    .card h3 { margin:0 0 8px; color:var(--primary); font-size:1.22rem; }
+    .card p { margin:6px 0; color:#444; }
+    .status { padding:4px 10px; border-radius:20px; font-weight:bold; font-size:12px; }
+    .status.active   { background:#e3f2fd; color:#1565c0; }
+    .status.expired  { background:#ffebee; color:var(--red); }
+
+    #loadMore { display:block; margin:20px auto; width:200px; }
+
+    @media (min-width: 768px) {
+        #mobileResults { display:none; }
+        #desktopTable { display:table; }
+        input, select { min-width:220px; }
+    }
+</style>
+</head>
+<body>
+
+<h1>NY Barber & Beauty Shops</h1>
+<p class="subtitle">Explore all 52,400+ licensed barber, cosmetology, nail & esthetics shops in New York State</p>
+
+<div id="controls">
+    <input id="search" placeholder="Search by shop name or city..." autocomplete="off">
+    <select id="cityFilter"><option value="">All Cities</option></select>
+    <select id="statusFilter"><option value="">All Statuses</option></select>
+    <button id="retryBtn">Retry Load</button>
+</div>
+
+<div id="resultsInfo"></div>
+<div id="debug"></div>
+<div id="loading" class="loading">Loading 52,400+ records from data.ny.gov… (10–25 seconds)</div>
+<div id="error" class="error" style="display:none;"></div>
+
+<table id="desktopTable">
+    <thead>
+        <tr>
+            <th data-sort="business_name">Shop Name</th>
+            <th data-sort="city">City</th>
+            <th data-sort="zip">ZIP</th>
+            <th data-sort="license_issued">Issued</th>
+            <th data-sort="license_expiration">Expires</th>
+            <th data-sort="license_status">Status</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<div id="mobileResults"></div>
+<button id="loadMore" style="display:none;">Load More</button>
+
+<script>
+    let allData = [];
+    let filtered = [];
+    let sort = { field: 'business_name', dir: 1 };
+    let cardsShown = 50;
+    const today = new Date('2025-12-01');
+
+    // Larger fallback sample (real data from API) – ensures cards appear instantly
+    const fallbackData = [
+        {"business_name":"SALON AVANTI LTD","business_city":"East Islip","business_zip":"11730","license_issue_date":"01/03/2014","license_expiration_date":"2026-02-03T00:00:00.000"},
+        {"business_name":"Melissa M Stark","business_city":"Depew","business_zip":"14043","license_issue_date":"2025-09-09T00:00:00.000","license_expiration_date":"2029-09-09T00:00:00.000"},
+        {"business_name":"JAN KLEIN STYLE LLC","business_city":"SOUTHAMPTON","business_zip":"11969","license_issue_date":"2014-01-03T00:00:00.000","license_expiration_date":"2027-04-05T00:00:00.000"},
+        {"business_name":"HYGGE NAIL & SPA INC","business_city":"Jamaica","business_zip":"11432","license_issue_date":"2024-01-30T00:00:00.000","license_expiration_date":"2028-01-30T00:00:00.000"},
+        {"business_name":"Emerald Hair Salon LLC","business_city":"Flushing","business_zip":"11354","license_issue_date":"2024-04-04T00:00:00.000","license_expiration_date":"2025-04-04T00:00:00.000"},
+        {"business_name":"DRAGON NAILS","business_city":"WARWICK","business_zip":"10990","license_issue_date":"2014-01-03T00:00:00.000","license_expiration_date":"2029-05-13T00:00:00.000"},
+        {"business_name":"SHEAR HEAVEN","business_city":"MIDDLEBURGH","business_zip":"12122","license_issue_date":"2014-01-03T00:00:00.000","license_expiration_date":"2029-05-10T00:00:00.000"},
+        {"business_name":"D'SHERSI UNISEX SALON CORP","business_city":"Bronx","business_zip":"10451","license_issue_date":"2016-12-05T00:00:00.000","license_expiration_date":"2029-09-16T00:00:00.000"},
+        {"business_name":"RAY MAZZINIS BARBER SHOP","business_city":"NEW YORK","business_zip":"10034","license_issue_date":"2014-01-03T00:00:00.000","license_expiration_date":"2027-12-07T00:00:00.000"},
+        {"business_name":"AMBERS HAIR SALON","business_city":"BRAINARDSVILLE","business_zip":"12915","license_issue_date":"2014-01-03T00:00:00.000","license_expiration_date":"2028-05-24T00:00:00.000"}
+    ].map(normalizeRecord);
+
+    function normalizeRecord(r) {
+        return {
+            business_name: (r.business_name || "").trim() || "Unnamed Shop",
+            city: (r.business_city || "").trim() || "Unknown City",
+            zip: (r.business_zip || "").trim() || "—",
+            license_issued: r.license_issue_date || "",
+            license_expiration: r.license_expiration_date || "",
+            license_status: getStatus(r.license_expiration_date || r.license_expiration)
+        };
+    }
+
+    function getStatus(exp) {
+        if (!exp) return "Unknown";
+        const expDate = new Date(exp);
+        return expDate > today ? "Active" : "Expired";
+    }
+
+    function formatDate(d) {
+        if (!d) return "—";
+        let dateStr = d;
+        if (dateStr.includes('T')) dateStr = dateStr.split('T')[0];
+        if (dateStr.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+            const [month, day, year] = dateStr.split('/');
+            dateStr = `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`;
+        }
+        const date = new Date(dateStr);
+        return isNaN(date.getTime()) ? d : date.toLocaleDateString();
+    }
+
+    async function loadAllData(retries = 3) {
+        const base = "https://data.ny.gov/resource/y3u4-jbgh.json";
+        const limit = 5000; // Smaller batches for reliability
+        let offset = 0;
+        let records = [];
+        let attempt = 1;
+
+        while (attempt <= retries) {
+            try {
+                while (true) {
+                    const url = `${base}?$limit=${limit}&$offset=${offset}&$order=business_name`;
+                    const res = await fetch(url, { cache: "no-store", mode: "cors" });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                    const batch = await res.json();
+                    if (!Array.isArray(batch) || batch.length === 0) break;
+                    records.push(...batch.map(normalizeRecord));
+                    updateLoading(`Loaded ${records.length.toLocaleString()} shops (batch ${Math.floor(offset/limit)+1})…`);
+                    offset += limit;
+                }
+                updateDebug(`✅ Full load complete: ${records.length} records fetched.`);
+                return records;
+            } catch (e) {
+                console.error(`Attempt ${attempt} failed:`, e);
+                updateDebug(`⚠️ Attempt ${attempt} failed: ${e.message}. Retrying...`);
+                attempt++;
+                if (attempt > retries) {
+                    updateError(`Full load failed after ${retries} tries (CORS/Network issue?). Using fallback sample of 10 records. Open browser console (F12) for details.`);
+                    return fallbackData;
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000 * (attempt - 1))); // Exponential backoff
+            }
+        }
+    }
+
+    function updateLoading(msg) {
+        document.getElementById("loading").textContent = msg;
+    }
+
+    function updateDebug(msg) {
+        document.getElementById("debug").textContent = msg;
+    }
+
+    function updateError(msg) {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("error").textContent = msg;
+        document.getElementById("error").style.display = "block";
+        updateDebug(msg);
+    }
+
+    function populateFilters() {
+        const cities = [...new Set(allData.map(r => r.city).filter(Boolean))].sort();
+        const citySel = document.getElementById("cityFilter");
+        citySel.innerHTML = '<option value="">All Cities</option>';
+        cities.forEach(c => citySel.innerHTML += `<option value="${c}">${c}</option>`);
+
+        const statuses = [...new Set(allData.map(r => r.license_status).filter(Boolean))].sort();
+        const statusSel = document.getElementById("statusFilter");
+        statusSel.innerHTML = '<option value="">All Statuses</option>';
+        statuses.forEach(s => statusSel.innerHTML += `<option value="${s}">${s}</option>`);
+    }
+
+    function renderDesktop(data) {
+        const tbody = document.querySelector("#desktopTable tbody");
+        tbody.innerHTML = "";
+        data.slice(0, 500).forEach(r => { // Limit for perf on large sets
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td><strong>${r.business_name}</strong></td>
+                <td>${r.city}</td>
+                <td>${r.zip}</td>
+                <td>${formatDate(r.license_issued)}</td>
+                <td>${formatDate(r.license_expiration)}</td>
+                <td><span class="status ${r.license_status.toLowerCase()}">${r.license_status}</span></td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function renderMobile(data) {
+        const container = document.getElementById("mobileResults");
+        container.innerHTML = "";
+        const frag = document.createDocumentFragment();
+        data.slice(0, cardsShown).forEach(r => {
+            const div = document.createElement("div");
+            div.className = "card";
+            div.innerHTML = `
+                <h3>${r.business_name}</h3>
+                <p><strong>Location:</strong> ${r.city}${r.zip ? ` (${r.zip})` : ""}</p>
+                <p><strong>Issued:</strong> ${formatDate(r.license_issued)}</p>
+                <p><strong>Expires:</strong> ${formatDate(r.license_expiration)}</p>
+                <p><strong>Status:</strong> <span class="status ${r.license_status.toLowerCase()}">${r.license_status}</span></p>
+            `;
+            frag.appendChild(div);
+        });
+        container.appendChild(frag);
+        document.getElementById("loadMore").style.display = data.length > cardsShown ? "block" : "none";
+    }
+
+    function updateResults() {
+        let list = [...allData]; // Copy to avoid mutating
+
+        // Search
+        const q = document.getElementById("search").value.trim().toLowerCase();
+        if (q) list = list.filter(r =>
+            r.business_name.toLowerCase().includes(q) || r.city.toLowerCase().includes(q));
+
+        // Filters
+        const city = document.getElementById("cityFilter").value;
+        if (city) list = list.filter(r => r.city === city);
+        const status = document.getElementById("statusFilter").value;
+        if (status) list = list.filter(r => r.license_status === status);
+
+        // Sort
+        list.sort((a, b) => {
+            let av = a[sort.field] || "";
+            let bv = b[sort.field] || "";
+            if (sort.field.includes('issued') || sort.field.includes('expiration')) {
+                av = new Date(formatDate(av)) || 0;
+                bv = new Date(formatDate(bv)) || 0;
+                return (av > bv ? 1 : (av < bv ? -1 : 0)) * sort.dir;
+            }
+            return av.toString().localeCompare(bv.toString()) * sort.dir;
+        });
+
+        filtered = list;
+        document.getElementById("resultsInfo").textContent =
+            `${list.length.toLocaleString()} of ${allData.length.toLocaleString()} shops`;
+
+        renderDesktop(list);
+        renderMobile(list);
+    }
+
+    // Events
+    document.querySelectorAll("th[data-sort]").forEach(th => {
+        th.addEventListener("click", () => {
+            const f = th.dataset.sort;
+            if (sort.field === f) sort.dir *= -1;
+            else { sort.field = f; sort.dir = 1; }
+            updateResults();
+        });
+    });
+
+    ["search", "cityFilter", "statusFilter"].forEach(id => {
+        const el = document.getElementById(id);
+        el.addEventListener("input", updateResults);
+        el.addEventListener("change", updateResults);
+    });
+
+    document.getElementById("loadMore").addEventListener("click", () => {
+        cardsShown += 50;
+        renderMobile(filtered);
+    });
+
+    document.getElementById("retryBtn").addEventListener("click", async () => {
+        document.getElementById("loading").style.display = "block";
+        document.getElementById("error").style.display = "none";
+        document.getElementById("debug").textContent = "";
+        allData = await loadAllData();
+        populateFilters();
+        updateResults();
+        document.getElementById("loading").style.display = "none";
+    });
+
+    // Start
+    (async () => {
+        try {
+            allData = await loadAllData();
+            document.getElementById("loading").style.display = "none";
+            populateFilters();
+            updateResults();
+        } catch (e) {
+            updateError(`Startup failed: ${e.message}. Try "Retry Load".`);
+            allData = fallbackData;
+            populateFilters();
+            updateResults();
+        }
+    })();
+</script>
+</body>
+</html>
